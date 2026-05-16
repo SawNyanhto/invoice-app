@@ -59,6 +59,16 @@ const lightenColor = (hex) => {
 };
 
 // ─── Theme ───────────────────────────────────────────────────────────────────
+function useMobile(bp = 640) {
+  const [m, setM] = useState(() => window.innerWidth < bp);
+  useEffect(() => {
+    const h = () => setM(window.innerWidth < bp);
+    window.addEventListener("resize", h);
+    return () => window.removeEventListener("resize", h);
+  }, [bp]);
+  return m;
+}
+
 const mkTheme = (dark) => ({
   bg:          dark ? "#0D1117" : "#F4F6FA",
   card:        dark ? "#161B22" : "#FFFFFF",
@@ -106,130 +116,156 @@ function NumInput({ value, onChange, style, min = 0 }) {
 export default function InvoiceApp() {
   const [page, setPage]               = useState("home");
   const [selectedBiz, setSelectedBiz] = useState(null);
-  const [collapsed, setCollapsed]     = useState(false);
-  const [loadedInvoice, setLoaded]    = useState(null);
-  const [dark, setDark]               = useState(() => localStorage.getItem("invoice-dark") === "true");
+  const [loadedInvoice, setLoaded]  = useState(null);
+  const [dark, setDark]             = useState(() => localStorage.getItem("invoice-dark") === "true");
   const [businesses, setBusinesses] = useState(getBusinesses);
 
-  const t = mkTheme(dark);
-  const toggleDark = () => setDark(d => { const v = !d; localStorage.setItem("invoice-dark", v); return v; });
+  const mobile = useMobile();
+  const t = { ...mkTheme(dark), mobile };
+  const toggleDark  = () => setDark(d => { const v = !d; localStorage.setItem("invoice-dark", v); return v; });
   const loadBusinesses = () => setBusinesses(getBusinesses());
-
   const goEditor = (bizKey, inv = null) => { setSelectedBiz(bizKey); setLoaded(inv); setPage("editor"); };
 
   return (
-    <div style={{ display: "flex", minHeight: "100vh", fontFamily: "'Inter','Segoe UI',sans-serif", background: t.bg, color: t.text }}>
+    <div style={{ minHeight: "100vh", fontFamily: "'Inter','Segoe UI',sans-serif", background: t.bg, color: t.text }}>
       <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet" />
-      <Sidebar page={page} onNavigate={setPage} collapsed={collapsed} onToggle={() => setCollapsed(c => !c)} dark={dark} onToggleDark={toggleDark} />
-      <div style={{ flex: 1, minWidth: 0, overflowY: "auto" }}>
-        {page === "home"     && <HomeScreen    businesses={businesses} onSelect={biz => goEditor(biz)} t={t} />}
-        {page === "editor"   && <InvoiceEditor businesses={businesses} business={selectedBiz} onBack={() => setPage("home")} loadedInvoice={loadedInvoice} t={t} />}
-        {page === "settings" && <SettingsPage  businesses={businesses} onSaved={loadBusinesses} t={t} />}
-        {page === "saved"    && <SavedPage     businesses={businesses} onLoad={inv => goEditor(inv.bizKey, inv)} onNew={() => setPage("home")} t={t} />}
-      </div>
+      {page === "home"     && <HomeScreen    businesses={businesses} onSelect={biz => goEditor(biz)} t={t} />}
+      {page === "editor"   && <InvoiceEditor businesses={businesses} business={selectedBiz} onBack={() => setPage("home")} loadedInvoice={loadedInvoice} t={t} />}
+      {page === "settings" && <SettingsPage  businesses={businesses} onSaved={loadBusinesses} t={t} />}
+      {page === "saved"    && <SavedPage     businesses={businesses} onLoad={inv => goEditor(inv.bizKey, inv)} onNew={() => setPage("home")} t={t} />}
+      <FloatingNav page={page} onNavigate={setPage} dark={dark} onToggleDark={toggleDark} t={t} />
     </div>
   );
 }
 
-// ─── Sidebar ─────────────────────────────────────────────────────────────────
-function Sidebar({ page, onNavigate, collapsed, onToggle, dark, onToggleDark }) {
-  const sections = [
-    {
-      label: "Menu",
-      items: [
-        { id: "home",  icon: "📄", label: "New Invoice" },
-        { id: "saved", icon: "🗂️", label: "Invoices"    },
-      ],
-    },
-    {
-      label: "General",
-      items: [
-        { id: "settings", icon: "⚙️", label: "Settings" },
-      ],
-    },
+// ─── Floating Nav ────────────────────────────────────────────────────────────
+function FloatingNav({ page, onNavigate, dark, onToggleDark }) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos]   = useState(() => {
+    try { const s = JSON.parse(localStorage.getItem("nav-pos")); return s || { x: 20, y: window.innerHeight - 74 }; }
+    catch { return { x: 20, y: window.innerHeight - 74 }; }
+  });
+  const posRef    = useRef(pos);
+  const dragState = useRef({ active: false, moved: false, sx: 0, sy: 0, px: 0, py: 0 });
+
+  useEffect(() => { posRef.current = pos; }, [pos]);
+
+  const startDrag = (cx, cy) => {
+    const d = dragState.current;
+    d.active = true; d.moved = false;
+    d.sx = cx; d.sy = cy;
+    d.px = posRef.current.x; d.py = posRef.current.y;
+  };
+
+  const moveDrag = (cx, cy) => {
+    const d = dragState.current;
+    if (!d.active) return;
+    const dx = cx - d.sx, dy = cy - d.sy;
+    if (Math.abs(dx) > 4 || Math.abs(dy) > 4) d.moved = true;
+    const SIZE = 54;
+    const nx = Math.max(0, Math.min(window.innerWidth  - SIZE, d.px + dx));
+    const ny = Math.max(0, Math.min(window.innerHeight - SIZE, d.py + dy));
+    setPos({ x: nx, y: ny });
+  };
+
+  const endDrag = () => {
+    const d = dragState.current;
+    if (!d.active) return;
+    d.active = false;
+    localStorage.setItem("nav-pos", JSON.stringify(posRef.current));
+    if (!d.moved) setOpen(o => !o);
+  };
+
+  useEffect(() => {
+    const onMM = e => moveDrag(e.clientX, e.clientY);
+    const onMU = () => endDrag();
+    const onTM = e => { e.preventDefault(); moveDrag(e.touches[0].clientX, e.touches[0].clientY); };
+    const onTE = () => endDrag();
+    document.addEventListener("mousemove", onMM);
+    document.addEventListener("mouseup",   onMU);
+    document.addEventListener("touchmove", onTM, { passive: false });
+    document.addEventListener("touchend",  onTE);
+    return () => {
+      document.removeEventListener("mousemove", onMM);
+      document.removeEventListener("mouseup",   onMU);
+      document.removeEventListener("touchmove", onTM);
+      document.removeEventListener("touchend",  onTE);
+    };
+  }, []);
+
+  const nav = [
+    { id: "home",     icon: "📄", label: "New Invoice" },
+    { id: "saved",    icon: "🗂️", label: "Invoices"    },
+    { id: "settings", icon: "⚙️", label: "Settings"    },
   ];
 
-  const S = {
+  const C = {
     bg:        dark ? "#161B22" : "#FFFFFF",
     border:    dark ? "#21262D" : "#EAECF0",
     text:      dark ? "#E6EDF3" : "#1C2128",
     textSub:   dark ? "#8B949E" : "#6B7280",
-    label:     dark ? "#484F58" : "#9BA8B6",
     iconBg:    dark ? "#21262D" : "#F3F4F6",
     activeBg:  dark ? "rgba(124,58,237,0.18)" : "#F0EBFF",
-    activeIcon:dark ? "rgba(124,58,237,0.3)"  : "#E4D9FF",
-    activeText:"#7C3AED",
-    cardBg:    dark ? "#1C2128" : "#F4F6FF",
-    cardBorder:dark ? "#21262D" : "#E0E7FF",
+    activeIcon:dark ? "rgba(124,58,237,0.28)" : "#E4D9FF",
   };
 
+  // Smart popup position — follows the button and stays inside the viewport
+  const SIZE = 54, PW = 218, PH = 290;
+  const showAbove = pos.y + SIZE + PH + 12 > window.innerHeight;
+  const popupTop  = showAbove ? pos.y - PH - 10 : pos.y + SIZE + 10;
+  const popupLeft = Math.max(10, Math.min(pos.x, window.innerWidth - PW - 10));
+
   return (
-    <div style={{ width: collapsed ? 64 : 240, minWidth: collapsed ? 64 : 240, background: S.bg, display: "flex", flexDirection: "column", transition: "width .2s,min-width .2s", overflow: "hidden", borderRight: `1px solid ${S.border}`, position: "sticky", top: 0, height: "100vh", flexShrink: 0 }}>
+    <>
+      {open && <div onClick={() => setOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 98 }} />}
 
-      {/* Header */}
-      <div style={{ padding: "14px 14px 12px", display: "flex", alignItems: "center", gap: 10, borderBottom: `1px solid ${S.border}` }}>
-        <div style={{ width: 36, height: 36, borderRadius: 10, background: "linear-gradient(135deg,#7C3AED,#A78BFA)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, flexShrink: 0 }}>📋</div>
-        {!collapsed && (
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 10, color: S.textSub, fontWeight: 500, letterSpacing: 0.3 }}>Invoice App ✦</div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: S.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>Invoice Creator</div>
-          </div>
-        )}
-        <button onClick={onToggle} style={{ background: "none", border: `1px solid ${S.border}`, borderRadius: 6, color: S.textSub, cursor: "pointer", fontSize: 12, width: 24, height: 24, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginLeft: collapsed ? "auto" : 0 }}>
-          {collapsed ? "›" : "‹"}
-        </button>
-      </div>
-
-      {/* Nav sections */}
-      <div style={{ flex: 1, overflowY: "auto", padding: "10px 10px" }}>
-        {sections.map(({ label, items }) => (
-          <div key={label} style={{ marginBottom: 6 }}>
-            {!collapsed && (
-              <div style={{ fontSize: 11, fontWeight: 600, color: S.label, letterSpacing: 0.8, padding: "8px 8px 6px", textTransform: "uppercase" }}>{label}</div>
-            )}
-            {items.map(item => {
-              const active = page === item.id || (page === "editor" && item.id === "home");
-              return (
-                <button key={item.id} onClick={() => onNavigate(item.id)} title={collapsed ? item.label : undefined}
-                  style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "6px 8px", borderRadius: 10, border: "none", background: active ? S.activeBg : "transparent", color: active ? S.activeText : S.text, cursor: "pointer", fontFamily: "inherit", fontSize: 13, fontWeight: active ? 600 : 400, transition: "all .15s", textAlign: "left", marginBottom: 3 }}>
-                  <div style={{ width: 32, height: 32, borderRadius: 8, background: active ? S.activeIcon : S.iconBg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, flexShrink: 0, transition: "all .15s" }}>
-                    {item.icon}
-                  </div>
-                  {!collapsed && <span style={{ whiteSpace: "nowrap" }}>{item.label}</span>}
-                </button>
-              );
-            })}
-          </div>
-        ))}
-      </div>
-
-      {/* Bottom card */}
-      <div style={{ padding: "0 10px 14px" }}>
-        {!collapsed ? (
-          <div style={{ background: S.cardBg, border: `1px solid ${S.cardBorder}`, borderRadius: 14, padding: "14px 14px 12px" }}>
-            <button onClick={onToggleDark} style={{ width: 36, height: 36, borderRadius: "50%", background: dark ? "#E6EDF3" : "#1C2128", display: "flex", alignItems: "center", justifyContent: "center", border: "none", cursor: "pointer", fontSize: 17, marginBottom: 8, color: dark ? "#1C2128" : "#F9FAFB" }}>
-              {dark ? "☀" : "☾"}
-            </button>
-            <div style={{ fontSize: 13, fontWeight: 600, color: S.text }}>{dark ? "Light Mode" : "Dark Mode"}</div>
-            <div style={{ fontSize: 11, color: S.textSub, marginTop: 2 }}>
-              Or switch <span style={{ color: "#7C3AED", cursor: "pointer", fontWeight: 500 }} onClick={onToggleDark}>appearance</span>
+      {/* Popup menu */}
+      {open && (
+        <div style={{ position: "fixed", left: popupLeft, top: popupTop, zIndex: 99, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 18, boxShadow: dark ? "0 16px 48px rgba(0,0,0,0.6)" : "0 16px 48px rgba(0,0,0,0.16)", padding: 10, width: PW }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px 12px", borderBottom: `1px solid ${C.border}`, marginBottom: 6 }}>
+            <div style={{ width: 32, height: 32, borderRadius: 9, background: "linear-gradient(135deg,#7C3AED,#A78BFA)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}>📋</div>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: C.text }}>Invoice Creator</div>
+              <div style={{ fontSize: 11, color: C.textSub }}>Invoice App ✦</div>
             </div>
           </div>
-        ) : (
-          <button onClick={onToggleDark} title={dark ? "Light mode" : "Dark mode"}
-            style={{ width: "100%", height: 40, borderRadius: 10, background: S.iconBg, border: "none", color: S.textSub, cursor: "pointer", fontSize: 17, display: "flex", alignItems: "center", justifyContent: "center" }}>
-            {dark ? "☀" : "☾"}
-          </button>
-        )}
-      </div>
-    </div>
+
+          {nav.map(item => {
+            const active = page === item.id || (page === "editor" && item.id === "home");
+            return (
+              <button key={item.id} onClick={() => { onNavigate(item.id); setOpen(false); }}
+                style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "8px 10px", borderRadius: 10, border: "none", background: active ? C.activeBg : "transparent", color: active ? "#7C3AED" : C.text, cursor: "pointer", fontFamily: "inherit", fontSize: 13, fontWeight: active ? 600 : 400, transition: "all .15s", textAlign: "left", marginBottom: 2 }}>
+                <div style={{ width: 30, height: 30, borderRadius: 8, background: active ? C.activeIcon : C.iconBg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, flexShrink: 0 }}>{item.icon}</div>
+                {item.label}
+              </button>
+            );
+          })}
+
+          <div style={{ borderTop: `1px solid ${C.border}`, marginTop: 6, paddingTop: 8 }}>
+            <button onClick={onToggleDark}
+              style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "8px 10px", borderRadius: 10, border: "none", background: "transparent", color: C.textSub, cursor: "pointer", fontFamily: "inherit", fontSize: 13, textAlign: "left" }}>
+              <div style={{ width: 30, height: 30, borderRadius: 8, background: C.iconBg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>{dark ? "☀" : "☾"}</div>
+              {dark ? "Light Mode" : "Dark Mode"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Draggable circle */}
+      <button
+        onMouseDown={e => { e.preventDefault(); startDrag(e.clientX, e.clientY); }}
+        onTouchStart={e => startDrag(e.touches[0].clientX, e.touches[0].clientY)}
+        style={{ position: "fixed", left: pos.x, top: pos.y, width: SIZE, height: SIZE, borderRadius: "50%", background: open ? "#5B21B6" : "linear-gradient(135deg,#7C3AED,#A78BFA)", border: "none", cursor: "grab", zIndex: 100, boxShadow: "0 4px 20px rgba(124,58,237,0.45)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, color: "#fff", userSelect: "none", touchAction: "none", transition: "background .2s, transform .2s", transform: open ? "rotate(90deg)" : "none" }}>
+        {open ? "✕" : "☰"}
+      </button>
+    </>
   );
 }
 
 // ─── Home Screen ─────────────────────────────────────────────────────────────
 function HomeScreen({ businesses, onSelect, t }) {
   return (
-    <div style={{ minHeight: "100vh", background: t.bg, display: "flex", alignItems: "center", justifyContent: "center", padding: 32 }}>
+    <div style={{ minHeight: "100vh", background: t.bg, display: "flex", alignItems: "center", justifyContent: "center", padding: t.mobile ? 16 : 32 }}>
       <div style={{ maxWidth: 480, width: "100%" }}>
         <div style={{ marginBottom: 32 }}>
           <h1 style={{ margin: "0 0 6px", fontSize: 26, fontWeight: 700, color: t.text, letterSpacing: -0.5 }}>New Invoice</h1>
@@ -278,7 +314,7 @@ function SettingsPage({ businesses: init, onSaved, t }) {
 
   const inp  = { width: "100%", padding: "9px 12px", border: `1px solid ${t.inputBorder}`, borderRadius: 8, fontSize: 14, fontFamily: "inherit", outline: "none", background: t.inputBg, color: t.text, boxSizing: "border-box" };
   const lbl  = { display: "block", fontSize: 11, fontWeight: 600, color: t.textMuted, marginBottom: 6, letterSpacing: 0.5, textTransform: "uppercase" };
-  const card = { background: t.card, borderRadius: 12, padding: 20, marginBottom: 16, boxShadow: t.shadowSm, border: `1px solid ${t.border}` };
+  const card = { background: t.card, borderRadius: 12, padding: t.mobile ? 14 : 20, marginBottom: 14, boxShadow: t.shadowSm, border: `1px solid ${t.border}` };
 
   return (
     <div style={{ minHeight: "100vh", background: t.bg }}>
@@ -287,7 +323,7 @@ function SettingsPage({ businesses: init, onSaved, t }) {
         <span style={{ fontSize: 13, color: t.textMuted }}>— Business Profiles</span>
       </div>
 
-      <div style={{ maxWidth: 720, margin: "0 auto", padding: 24 }}>
+      <div style={{ maxWidth: 720, margin: "0 auto", padding: t.mobile ? 12 : 24 }}>
         {Object.entries(businesses).map(([key, biz]) => (
           <div key={key} style={card}>
             <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20, paddingBottom: 16, borderBottom: `1px solid ${t.border}` }}>
@@ -423,7 +459,7 @@ function SavedPage({ businesses, onLoad, onNew, t }) {
       </div>
 
       {/* Invoice list */}
-      <div style={{ maxWidth: 760, margin: "0 auto", padding: 24 }}>
+      <div style={{ maxWidth: 760, margin: "0 auto", padding: t.mobile ? 12 : 24 }}>
         {invoices.length === 0 ? (
           <div style={{ ...card, textAlign: "center", padding: "56px 24px" }}>
             <div style={{ fontSize: 40, marginBottom: 12, opacity: 0.25 }}>≡</div>
@@ -436,7 +472,7 @@ function SavedPage({ businesses, onLoad, onNew, t }) {
             {invoices.map(inv => {
               const biz = businesses[inv.bizKey] || DEFAULT_BUSINESSES[inv.bizKey] || {};
               return (
-                <div key={inv.id} style={{ ...card, padding: "14px 18px", display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+                <div key={inv.id} style={{ ...card, padding: t.mobile ? "12px" : "14px 18px", display: "flex", alignItems: "center", gap: t.mobile ? 10 : 14, flexWrap: "wrap" }}>
                   <div style={{ width: 38, height: 38, borderRadius: 9, background: biz.logo ? t.cardAlt : `linear-gradient(135deg,${biz.color||"#7C3AED"},${biz.accent||"#A78BFA"})`, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 700, fontSize: 15, flexShrink: 0, overflow: "hidden", border: `1px solid ${t.border}` }}>
                     {biz.logo ? <img src={biz.logo} alt="" style={{ width: "100%", height: "100%", objectFit: "contain" }} /> : (biz.shortName||biz.name||"?")[0]}
                   </div>
@@ -461,7 +497,7 @@ function SavedPage({ businesses, onLoad, onNew, t }) {
       {previewInv && (() => {
         const props = buildTplProps(previewInv, businesses);
         return (
-          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: t.mobile ? 8 : 20 }}
             onClick={e => { if (e.target === e.currentTarget) setPreviewInv(null); }}>
             <div style={{ background: t.bg, borderRadius: 16, width: "100%", maxWidth: 880, maxHeight: "92vh", display: "flex", flexDirection: "column", boxShadow: "0 24px 64px rgba(0,0,0,0.4)", overflow: "hidden" }}>
               <div style={{ height: 52, background: t.card, borderBottom: `1px solid ${t.border}`, display: "flex", alignItems: "center", padding: "0 20px", gap: 10, flexShrink: 0 }}>
@@ -470,10 +506,8 @@ function SavedPage({ businesses, onLoad, onNew, t }) {
                 <button onClick={() => handleDownload("image", previewInv.invoiceNum)} style={{ ...btnOut,  padding: "7px 14px", fontSize: 13, marginLeft: 4 }}>↓ PNG</button>
                 <button onClick={() => setPreviewInv(null)} style={{ ...btnOut, marginLeft: 4 }}>✕ Close</button>
               </div>
-              <div style={{ flex: 1, overflowY: "auto", padding: 24, background: t.cardAlt }}>
-                <div ref={printRef} style={{ background: "#fff", borderRadius: 12, boxShadow: "0 4px 24px rgba(0,0,0,0.1)", maxWidth: 800, margin: "0 auto" }}>
-                  <InvoiceTemplate {...props} />
-                </div>
+              <div style={{ flex: 1, overflowY: "auto", padding: "16px", background: t.cardAlt }}>
+                <ScaledInvoice tplProps={props} innerRef={printRef} />
               </div>
             </div>
           </div>
@@ -553,7 +587,7 @@ function InvoiceEditor({ businesses, business: bizKey, onBack, loadedInvoice, t 
 
   const inp      = { width: "100%", padding: "9px 12px", border: `1px solid ${t.inputBorder}`, borderRadius: 8, fontSize: 14, fontFamily: "inherit", outline: "none", background: t.inputBg, color: t.text, boxSizing: "border-box", transition: "border-color .15s" };
   const lbl      = { display: "block", fontSize: 11, fontWeight: 600, color: t.textMuted, marginBottom: 6, letterSpacing: 0.5, textTransform: "uppercase" };
-  const sec      = { background: t.card, borderRadius: 12, padding: 20, marginBottom: 14, border: `1px solid ${t.border}`, boxShadow: t.shadowSm };
+  const sec      = { background: t.card, borderRadius: 12, padding: t.mobile ? 14 : 20, marginBottom: 12, border: `1px solid ${t.border}`, boxShadow: t.shadowSm };
   const secTitle = { fontSize: 11, fontWeight: 600, color: t.textMuted, letterSpacing: 1, textTransform: "uppercase", marginBottom: 16 };
   const btnP     = { background: `linear-gradient(135deg,${biz.color},${biz.accent})`, color: "#fff", border: "none", borderRadius: 8, padding: "9px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" };
   const btnS     = { background: t.cardAlt, color: t.text, border: `1px solid ${t.border}`, borderRadius: 8, padding: "9px 18px", fontSize: 13, fontWeight: 500, cursor: "pointer", fontFamily: "inherit" };
@@ -566,25 +600,21 @@ function InvoiceEditor({ businesses, business: bizKey, onBack, loadedInvoice, t 
   return (
     <div style={{ minHeight: "100vh", background: t.bg }}>
       {/* Topbar */}
-      <div style={{ height: 52, background: t.card, borderBottom: `1px solid ${t.border}`, display: "flex", alignItems: "center", padding: "0 20px", gap: 10, position: "sticky", top: 0, zIndex: 10 }}>
-        <button onClick={onBack} style={{ ...btnS, padding: "6px 14px" }}>←</button>
-        <div style={{ width: 1, height: 20, background: t.border }} />
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <div style={{ width: 22, height: 22, borderRadius: 5, background: biz.logo ? t.cardAlt : `linear-gradient(135deg,${biz.color},${biz.accent})`, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 11, fontWeight: 700, overflow: "hidden", border: `1px solid ${t.border}` }}>
+      <div style={{ height: 52, background: t.card, borderBottom: `1px solid ${t.border}`, display: "flex", alignItems: "center", padding: "0 12px", gap: 8, position: "sticky", top: 0, zIndex: 10 }}>
+        <button onClick={onBack} style={{ ...btnS, padding: "6px 12px", flexShrink: 0 }}>←</button>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, minWidth: 0, overflow: "hidden" }}>
+          <div style={{ width: 24, height: 24, borderRadius: 6, background: biz.logo ? t.cardAlt : `linear-gradient(135deg,${biz.color},${biz.accent})`, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 11, fontWeight: 700, overflow: "hidden", border: `1px solid ${t.border}`, flexShrink: 0 }}>
             {biz.logo ? <img src={biz.logo} alt="" style={{ width: "100%", height: "100%", objectFit: "contain" }} /> : (biz.shortName||biz.name)[0]}
           </div>
-          <span style={{ fontWeight: 500, fontSize: 14, color: t.text }}>{biz.name}</span>
-          <span style={{ color: t.textMuted }}>›</span>
-          <span style={{ fontSize: 13, color: t.textSub }}>New Invoice</span>
+          <span style={{ fontWeight: 600, fontSize: 13, color: t.text, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{biz.shortName || biz.name}</span>
         </div>
-        <div style={{ flex: 1 }} />
-        <button onClick={handleSave} disabled={saveStatus === "saving"} style={saveBtnStyle}>{saveBtnLabel}</button>
-        <button onClick={() => handleDownload("pdf")} style={{ ...btnS, marginLeft: 2 }}>↓ PDF</button>
+        <button onClick={handleSave} disabled={saveStatus === "saving"} style={{ ...saveBtnStyle, flexShrink: 0, padding: "7px 14px", fontSize: 13 }}>{saveBtnLabel}</button>
+        <button onClick={() => handleDownload("pdf")} style={{ ...btnS, flexShrink: 0, padding: "7px 12px", fontSize: 13 }}>↓ PDF</button>
       </div>
 
 
 
-      <div style={{ maxWidth: 760, margin: "0 auto", padding: "20px 20px 40px" }}>
+      <div style={{ maxWidth: 760, margin: "0 auto", padding: t.mobile ? "12px 12px 100px" : "20px 20px 40px" }}>
 
         {/* Invoice Settings */}
         <div style={sec}>
@@ -678,7 +708,7 @@ function InvoiceEditor({ businesses, business: bizKey, onBack, loadedInvoice, t 
         <div style={sec}>
           <div style={secTitle}>Items / Services</div>
           {items.map((item, idx) => (
-            <div key={item.id} style={{ background: t.cardAlt, borderRadius: 9, padding: 14, marginBottom: 10, border: `1px solid ${t.border}` }}>
+            <div key={item.id} style={{ background: t.cardAlt, borderRadius: 9, padding: t.mobile ? 10 : 14, marginBottom: 8, border: `1px solid ${t.border}` }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                 <span style={{ fontSize: 12, fontWeight: 600, color: t.textMuted }}>Item {idx+1}</span>
                 <button onClick={() => removeItem(item.id)} style={{ background: "transparent", border: "none", color: "#EF4444", cursor: "pointer", fontSize: 12, padding: "3px 8px", borderRadius: 6, fontFamily: "inherit" }}>Remove</button>
@@ -746,35 +776,57 @@ function InvoiceEditor({ businesses, business: bizKey, onBack, loadedInvoice, t 
         </div>
 
         {/* Bottom actions */}
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button onClick={() => setShowPreview(true)}    style={{ ...btnP,  flex: 1, minWidth: 120 }}>👁 Preview Invoice</button>
-          <button onClick={handleSave} disabled={saveStatus==="saving"} style={{ ...saveBtnStyle, flex: 1, minWidth: 120 }}>{saveStatus==="saving"?"Saving…":saveStatus==="ok"?"✓ Saved":saveStatus==="error"?"✕ Failed":"Save Invoice"}</button>
-          <button onClick={() => handleDownload("pdf")}   style={{ ...btnS,  flex: 1, minWidth: 120 }}>Download PDF</button>
-          <button onClick={() => handleDownload("image")} style={{ ...btnS,  flex: 1, minWidth: 120 }}>Download PNG</button>
+        <div style={{ display: "grid", gridTemplateColumns: t.mobile ? "1fr 1fr" : "repeat(4,1fr)", gap: 8 }}>
+          <button onClick={() => setShowPreview(true)}    style={{ ...btnP,  padding: "11px 8px", fontSize: t.mobile ? 13 : 14 }}>👁 Preview</button>
+          <button onClick={handleSave} disabled={saveStatus==="saving"} style={{ ...saveBtnStyle, padding: "11px 8px", fontSize: t.mobile ? 13 : 14 }}>{saveStatus==="saving"?"Saving…":saveStatus==="ok"?"✓ Saved":saveStatus==="error"?"✕ Failed":"💾 Save"}</button>
+          <button onClick={() => handleDownload("pdf")}   style={{ ...btnS,  padding: "11px 8px", fontSize: t.mobile ? 13 : 14 }}>↓ PDF</button>
+          <button onClick={() => handleDownload("image")} style={{ ...btnS,  padding: "11px 8px", fontSize: t.mobile ? 13 : 14 }}>↓ PNG</button>
         </div>
       </div>
 
       {/* Preview Modal */}
       {showPreview && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: t.mobile ? 8 : 20 }}
           onClick={e => { if (e.target === e.currentTarget) setShowPreview(false); }}>
           <div style={{ background: t.bg, borderRadius: 16, width: "100%", maxWidth: 880, maxHeight: "92vh", display: "flex", flexDirection: "column", boxShadow: "0 24px 64px rgba(0,0,0,0.4)", overflow: "hidden" }}>
             {/* Modal topbar */}
-            <div style={{ height: 52, background: t.card, borderBottom: `1px solid ${t.border}`, display: "flex", alignItems: "center", padding: "0 20px", gap: 10, flexShrink: 0 }}>
-              <span style={{ fontWeight: 600, fontSize: 14, color: t.text, flex: 1 }}>Invoice Preview</span>
-              <button onClick={() => handleDownload("pdf")}   style={btnP}>↓ PDF</button>
-              <button onClick={() => handleDownload("image")} style={{ ...btnS, marginLeft: 4 }}>↓ PNG</button>
+            <div style={{ height: 52, background: t.card, borderBottom: `1px solid ${t.border}`, display: "flex", alignItems: "center", padding: "0 12px", gap: 8, flexShrink: 0 }}>
+              <span style={{ fontWeight: 600, fontSize: 14, color: t.text, flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>Invoice Preview</span>
+              <button onClick={() => handleDownload("pdf")}   style={{ ...btnP, padding: "7px 12px", fontSize: 13 }}>↓ PDF</button>
+              <button onClick={() => handleDownload("image")} style={{ ...btnS,  padding: "7px 12px", fontSize: 13 }}>↓ PNG</button>
               <button onClick={() => setShowPreview(false)} style={{ ...btnS, marginLeft: 4 }}>✕ Close</button>
             </div>
             {/* Invoice content */}
-            <div style={{ flex: 1, overflowY: "auto", padding: 24, background: t.cardAlt }}>
-              <div ref={printRef} style={{ background: "#fff", borderRadius: 12, boxShadow: "0 4px 24px rgba(0,0,0,0.1)", maxWidth: 800, margin: "0 auto" }}>
-                <InvoiceTemplate {...tplProps} />
-              </div>
+            <div style={{ flex: 1, overflowY: "auto", padding: "16px", background: t.cardAlt }}>
+              <ScaledInvoice tplProps={tplProps} />
             </div>
           </div>
         </div>
       )}
+
+      {/* Hidden invoice always rendered so Download PDF/PNG always works */}
+      <div style={{ position: "fixed", left: "-9999px", top: 0, zIndex: -1, pointerEvents: "none", width: 800 }}>
+        <div ref={printRef} style={{ width: 800, minWidth: 800, background: "#fff", overflow: "hidden" }}>
+          <InvoiceTemplate {...tplProps} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Scaled invoice wrapper (fits any screen, full quality) ──────────────────
+function ScaledInvoice({ tplProps, innerRef, shadow = true }) {
+  const [scale, setScale] = useState(() => Math.min(1, (window.innerWidth - 32) / 800));
+  useEffect(() => {
+    const update = () => setScale(Math.min(1, (window.innerWidth - 32) / 800));
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
+  return (
+    <div style={{ overflow: "hidden", borderRadius: 12, boxShadow: shadow ? "0 4px 24px rgba(0,0,0,0.12)" : "none", background: "#fff", display: "inline-block", width: "100%" }}>
+      <div ref={innerRef} style={{ zoom: scale, width: 800 }}>
+        <InvoiceTemplate {...tplProps} />
+      </div>
     </div>
   );
 }
@@ -783,7 +835,7 @@ function InvoiceEditor({ businesses, business: bizKey, onBack, loadedInvoice, t 
 function InvoiceTemplate({ template, biz, bizKey, client, invoiceNum, invoiceDate, dueDate, items, calcItemTotal, currency, subtotal, globalDiscAmt, taxRate, taxAmt, grandTotal, paymentMethod, note, formatCurrency, layout, courseStartDate, courseDuration, courseDurationUnit, deposit, deliveryFee }) {
   const color  = biz.color  || DEFAULT_BUSINESSES[bizKey]?.color  || "#7C3AED";
   const accent = biz.accent || DEFAULT_BUSINESSES[bizKey]?.accent || "#A78BFA";
-  const base   = { fontFamily: "'Inter','Segoe UI',sans-serif", background: "#fff", color: "#1C2128", padding: "clamp(24px,5vw,48px)", fontSize: 14, lineHeight: 1.6, minHeight: 600 };
+  const base   = { fontFamily: "'Inter','Segoe UI',sans-serif", background: "#fff", color: "#1C2128", padding: "40px", fontSize: 14, lineHeight: 1.6, minHeight: 600 };
 
   const headerModern = (
     <div style={{ display:"flex", flexWrap:"wrap", justifyContent:"space-between", alignItems:"flex-start", gap:20, marginBottom:36 }}>
@@ -792,9 +844,9 @@ function InvoiceTemplate({ template, biz, bizKey, client, invoiceNum, invoiceDat
           {biz.logo ? <img src={biz.logo} alt={biz.name} style={{ width:"100%", height:"100%", objectFit:"contain" }} /> : (biz.name?.[0]||"?")}
         </div>
         <div style={{ fontWeight:700, fontSize:16 }}>{biz.name}</div>
-        {biz.phone&&<div style={{ color:"#57606A", fontSize:12, marginTop:3 }}>{biz.phone}</div>}
-        {biz.email&&<div style={{ color:"#57606A", fontSize:12 }}>{biz.email}</div>}
-        {biz.address&&<div style={{ color:"#57606A", fontSize:12 }}>{biz.address}</div>}
+        {biz.phone&&<div style={{ color:"#1C2128", fontSize:12, marginTop:3, fontWeight:700 }}>{biz.phone}</div>}
+        {biz.email&&<div style={{ color:"#1C2128", fontSize:12, fontWeight:700 }}>{biz.email}</div>}
+        {biz.address&&<div style={{ color:"#1C2128", fontSize:12, fontWeight:700 }}>{biz.address}</div>}
       </div>
       <div style={{ textAlign:"right" }}>
         <div style={{ fontSize:32, fontWeight:700, color, fontFamily:"'Playfair Display',serif", letterSpacing:-1 }}>INVOICE</div>
@@ -810,8 +862,8 @@ function InvoiceTemplate({ template, biz, bizKey, client, invoiceNum, invoiceDat
     <div style={{ textAlign:"center", borderBottom:`2px solid ${color}`, paddingBottom:20, marginBottom:28 }}>
       {biz.logo && <div style={{ display:"flex", justifyContent:"center", marginBottom:12 }}><img src={biz.logo} alt={biz.name} style={{ height:80, objectFit:"contain" }} /></div>}
       <div style={{ fontWeight:700, fontSize:24, fontFamily:"'Playfair Display',serif", color }}>{biz.name}</div>
-      {biz.tagline&&<div style={{ color:"#57606A", fontStyle:"italic", fontSize:13, marginTop:4 }}>{biz.tagline}</div>}
-      <div style={{ color:"#57606A", fontSize:12, marginTop:6 }}>{[biz.phone,biz.email,biz.address].filter(Boolean).join("  ·  ")}</div>
+      {biz.tagline&&<div style={{ color:"#1C2128", fontStyle:"italic", fontSize:13, marginTop:4, fontWeight:700 }}>{biz.tagline}</div>}
+      <div style={{ color:"#1C2128", fontSize:12, marginTop:6, fontWeight:700 }}>{[biz.phone,biz.email,biz.address].filter(Boolean).join("  ·  ")}</div>
       <div style={{ marginTop:16, fontSize:20, fontWeight:700, letterSpacing:4, color:"#1C2128" }}>INVOICE</div>
       <div style={{ color:"#57606A", fontSize:12, marginTop:4 }}>{invoiceNum} · {invoiceDate}{dueDate?` · Due ${dueDate}`:""}</div>
     </div>
@@ -824,20 +876,20 @@ function InvoiceTemplate({ template, biz, bizKey, client, invoiceNum, invoiceDat
         <div>
           {biz.logo && <img src={biz.logo} alt={biz.name} style={{ height:60, objectFit:"contain", marginBottom:8, display:"block" }} />}
           <div style={{ fontWeight:600 }}>{biz.name}</div>
-          <div style={{ color:"#57606A", fontSize:12 }}>{[biz.phone,biz.email].filter(Boolean).join(" · ")}</div>
-          {biz.address&&<div style={{ color:"#57606A",fontSize:12 }}>{biz.address}</div>}
+          <div style={{ color:"#1C2128", fontSize:12, fontWeight:700 }}>{[biz.phone,biz.email].filter(Boolean).join(" · ")}</div>
+          {biz.address&&<div style={{ color:"#1C2128",fontSize:12, fontWeight:700 }}>{biz.address}</div>}
         </div>
         <div style={{ color:"#57606A", fontSize:12, textAlign:"right" }}><div>{invoiceDate}</div>{dueDate&&<div>Due: {dueDate}</div>}</div>
       </div>
     </div>
   );
   const headerBold = (
-    <div style={{ background:`linear-gradient(135deg,${color},${accent})`, margin:"-clamp(24px,5vw,48px)", marginBottom:28, padding:"clamp(24px,5vw,40px)", color:"#fff" }}>
+    <div style={{ background:`linear-gradient(135deg,${color},${accent})`, margin:"-40px", marginBottom:28, padding:"36px 40px", color:"#fff" }}>
       <div style={{ display:"flex", flexWrap:"wrap", justifyContent:"space-between", alignItems:"flex-end", gap:16 }}>
         <div>
           {biz.logo && <img src={biz.logo} alt={biz.name} style={{ height:70, objectFit:"contain", marginBottom:10, display:"block", filter:"brightness(0) invert(1)", opacity:.9 }} />}
-          <div style={{ fontSize:"clamp(22px,5vw,30px)", fontWeight:700, fontFamily:"'Playfair Display',serif" }}>{biz.name}</div>
-          <div style={{ opacity:.8, fontSize:12, marginTop:6 }}>{[biz.phone,biz.email,biz.address].filter(Boolean).join("  ·  ")}</div>
+          <div style={{ fontSize:"28px", fontWeight:700, fontFamily:"'Playfair Display',serif" }}>{biz.name}</div>
+          <div style={{ opacity:.8, fontSize:12, marginTop:6, fontWeight:700 }}>{[biz.phone,biz.email,biz.address].filter(Boolean).join("  ·  ")}</div>
         </div>
         <div style={{ textAlign:"right" }}><div style={{ fontSize:28, fontWeight:700, letterSpacing:-1 }}>INVOICE</div><div style={{ opacity:.8, fontSize:12 }}>{invoiceNum} · {invoiceDate}</div>{dueDate&&<div style={{ opacity:.8, fontSize:12 }}>Due: {dueDate}</div>}</div>
       </div>
@@ -847,12 +899,12 @@ function InvoiceTemplate({ template, biz, bizKey, client, invoiceNum, invoiceDat
   const headers = { modern:headerModern, classic:headerClassic, minimal:headerMinimal, bold:headerBold };
 
   const clientSection = client.name ? (
-    <div style={{ background:"#F6F8FA", borderRadius:10, padding:14, marginBottom:24, border:"1px solid #E4E8EF" }}>
+    <div style={{ background:"transparent", borderRadius:10, padding:14, marginBottom:24, border:"1px solid #1C2128" }}>
       <div style={{ fontSize:10, fontWeight:600, color:"#9BA8B6", letterSpacing:1.5, marginBottom:8, textTransform:"uppercase" }}>Bill To</div>
-      <div style={{ fontWeight:600 }}>{client.name}</div>
-      {client.phone&&<div style={{ color:"#57606A", fontSize:12 }}>{client.phone}</div>}
-      {client.email&&<div style={{ color:"#57606A", fontSize:12 }}>{client.email}</div>}
-      {client.address&&<div style={{ color:"#57606A", fontSize:12 }}>{client.address}</div>}
+      <div style={{ fontWeight:700 }}>{client.name}</div>
+      {client.phone&&<div style={{ color:"#1C2128", fontSize:12, fontWeight:700 }}>{client.phone}</div>}
+      {client.email&&<div style={{ color:"#1C2128", fontSize:12, fontWeight:700 }}>{client.email}</div>}
+      {client.address&&<div style={{ color:"#1C2128", fontSize:12, fontWeight:700 }}>{client.address}</div>}
     </div>
   ) : null;
 
